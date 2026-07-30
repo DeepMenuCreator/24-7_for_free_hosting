@@ -1,0 +1,5 @@
+name: FakePlayer24-7
+version: ${version}
+main: com.example.fakeplayer.FakePlayerPlugin
+api-version: '1.21'
+description: Creates an invisible fake player to keep server online 24/7
