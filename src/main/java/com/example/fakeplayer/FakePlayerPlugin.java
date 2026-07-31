@@ -3,6 +3,7 @@ package com.example.fakeplayer;
 import com.mojang.authlib.GameProfile;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
@@ -24,6 +25,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,7 +41,6 @@ public class FakePlayerPlugin extends JavaPlugin implements Listener {
     public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
 
-        // Создаём мир "Server" если его нет
         World serverWorld = Bukkit.getWorld("Server");
         if (serverWorld == null) {
             getLogger().info("Creating world 'Server'...");
@@ -49,16 +50,15 @@ public class FakePlayerPlugin extends JavaPlugin implements Listener {
                     .createWorld();
         }
 
-        // Ждём полной загрузки сервера
+        final World finalWorld = serverWorld;
         Bukkit.getScheduler().runTaskLater(this, () -> {
             try {
-                createFakePlayer(serverWorld);
+                createFakePlayer(finalWorld);
             } catch (Exception e) {
                 getLogger().log(Level.SEVERE, "Failed to create fake player", e);
             }
         }, 40L);
 
-        // Проверяем каждую минуту что бот жив
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -75,11 +75,9 @@ public class FakePlayerPlugin extends JavaPlugin implements Listener {
         GameProfile profile = new GameProfile(FAKE_UUID, FAKE_NAME);
         ClientInformation clientInfo = ClientInformation.createDefault();
 
-        // Создаём фейкового игрока
         fakePlayer = new ServerPlayer(minecraftServer, serverLevel, profile, clientInfo);
         fakePlayer.setPos(0.5, 128, 0.5);
 
-        // Фейковое соединение — нужно чтобы NMS не падал с NPE
         Connection connection = new Connection(PacketFlow.SERVERBOUND);
         ServerGamePacketListenerImpl packetListener = new ServerGamePacketListenerImpl(
                 minecraftServer,
@@ -89,7 +87,6 @@ public class FakePlayerPlugin extends JavaPlugin implements Listener {
         );
         fakePlayer.connection = packetListener;
 
-        // Защита: неуязвимость, полёт, полный голод
         fakePlayer.setInvulnerable(true);
         fakePlayer.getAbilities().flying = true;
         fakePlayer.getAbilities().invulnerable = true;
@@ -97,10 +94,12 @@ public class FakePlayerPlugin extends JavaPlugin implements Listener {
         fakePlayer.getFoodData().setFoodLevel(20);
         fakePlayer.getFoodData().setSaturation(20.0F);
 
-        // Креатив для полной защиты
-        fakePlayer.gameMode.setGameModeForPlayer(GameType.CREATIVE, null);
+        // setGameModeForPlayer — protected, через рефлексию
+        Method setGameMode = fakePlayer.gameMode.getClass().getDeclaredMethod(
+                "setGameModeForPlayer", GameType.class, GameType.class);
+        setGameMode.setAccessible(true);
+        setGameMode.invoke(fakePlayer.gameMode, GameType.CREATIVE, null);
 
-        // === Регистрация в PlayerList вручную ===
         var playerList = minecraftServer.getPlayerList();
 
         Field playersField = playerList.getClass().getDeclaredField("players");
@@ -121,10 +120,8 @@ public class FakePlayerPlugin extends JavaPlugin implements Listener {
         Map<UUID, ServerPlayer> byUUID = (Map<UUID, ServerPlayer>) byUUIDField.get(playerList);
         byUUID.put(profile.getId(), fakePlayer);
 
-        // Добавляем в мир
         serverLevel.addNewPlayer(fakePlayer);
 
-        // Скрываем от всех текущих игроков (таб, чат, в игре)
         CraftPlayer craftFake = (CraftPlayer) fakePlayer.getBukkitEntity();
         for (Player p : Bukkit.getOnlinePlayers()) {
             if (!p.getUniqueId().equals(FAKE_UUID)) {
@@ -152,7 +149,6 @@ public class FakePlayerPlugin extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
-        // Скрываем бота от новых игроков
         if (fakePlayer != null) {
             Player fake = Bukkit.getPlayer(FAKE_UUID);
             if (fake != null && fake.isOnline()) {
@@ -165,7 +161,7 @@ public class FakePlayerPlugin extends JavaPlugin implements Listener {
     public void onDisable() {
         if (fakePlayer != null && fakePlayer.connection != null) {
             try {
-                fakePlayer.connection.disconnect("Server shutdown");
+                fakePlayer.connection.disconnect(Component.literal("Server shutdown"));
             } catch (Exception ignored) {
             }
         }
